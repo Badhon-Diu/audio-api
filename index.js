@@ -313,9 +313,80 @@ function handleGroqError(err, res) {
 }
 
 app.get('/health', (_req, res) => {
-  console.log(`[HEALTH] /health check hit — uptime=${process.uptime().toFixed(1)}s`);
-  res.json({ status: 'ok', uptime: process.uptime() });
+  const now = new Date();
+  const uptimeSeconds = process.uptime();
+  const mem = process.memoryUsage();
+
+  const healthInfo = {
+    status: 'ok',
+    service: 'Student Mark Extraction API',
+    currentTime: {
+      iso: now.toISOString(),
+      utc: now.toUTCString(),
+      unix: Math.floor(now.getTime() / 1000),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    },
+    uptime: {
+      seconds: Number(uptimeSeconds.toFixed(2)),
+      formatted: formatUptime(uptimeSeconds),
+    },
+    models: {
+      transcription: {
+        provider: 'Groq',
+        model: 'whisper-large-v3-turbo',
+        purpose: 'Audio → text transcription',
+      },
+      extraction: {
+        provider: 'Groq',
+        model: 'llama-3.1-8b-instant',
+        purpose: 'Text → structured JSON (student id + mark)',
+      },
+    },
+    config: {
+      port,
+      maxFileSizeMB: 25,
+      allowedFileTypes: ['audio/*', 'video/webm'],
+      rateLimit: '30 requests/minute/IP on /transcribe',
+      requestTimeoutMs: server.requestTimeout,
+      headersTimeoutMs: server.headersTimeout,
+      groqTimeoutMs: 30_000,
+      groqMaxRetries: 2,
+    },
+    system: {
+      nodeVersion: process.version,
+      platform: process.platform,
+      arch: process.arch,
+      pid: process.pid,
+      memoryUsageMB: {
+        rss: Number((mem.rss / 1024 / 1024).toFixed(2)),
+        heapTotal: Number((mem.heapTotal / 1024 / 1024).toFixed(2)),
+        heapUsed: Number((mem.heapUsed / 1024 / 1024).toFixed(2)),
+        external: Number((mem.external / 1024 / 1024).toFixed(2)),
+      },
+    },
+    env: {
+      groqApiKeyConfigured: Boolean(process.env.GROQ_API_KEY),
+      nodeEnv: process.env.NODE_ENV || 'not set',
+    },
+  };
+
+  console.log(`[HEALTH] /health check hit — uptime=${uptimeSeconds.toFixed(1)}s, mem(heapUsed)=${healthInfo.system.memoryUsageMB.heapUsed}MB`);
+  res.json(healthInfo);
 });
+
+// Helper: turn raw seconds into a human-readable "Xd Xh Xm Xs" string
+function formatUptime(totalSeconds) {
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+  const parts = [];
+  if (days) parts.push(`${days}d`);
+  if (hours) parts.push(`${hours}h`);
+  if (minutes) parts.push(`${minutes}m`);
+  parts.push(`${seconds}s`);
+  return parts.join(' ');
+}
 
 // ---------------------------------------------------------------------------
 // Error middleware — must be last. Catches multer errors (size/type) so they
