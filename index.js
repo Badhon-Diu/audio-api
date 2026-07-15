@@ -185,20 +185,25 @@ RULES:
 - "key" = student name or partial ID as spoken
 - "mark" = integer 0-100
 - If nothing found, return []
+- The examples below are FORMAT REFERENCE ONLY. NEVER repeat them in your output.
+- Your output MUST be a complete JSON array ending with ].
+- When you see a pattern like "251 15 103 got 6", the prefix "251 15" gives context. Only extract "103" as the key, and 6 as the mark. Do NOT create a separate entry for "251" or "15".
 
-EXAMPLES:
+EXAMPLES (format reference only — do NOT copy these into your answer):
 Input: "Habibul got 19, 2336 got 17, 1707 got 20"
 Output: [{"key":"Habibul","mark":19},{"key":"2336","mark":17},{"key":"1707","mark":20}]
 
 Input: "Zerin 20, Habibul 19"
 Output: [{"key":"Zerin","mark":20},{"key":"Habibul","mark":19}]
+
+=== REAL INPUT ===
 `.trim();
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-// Groq (and LLMs in general) sometimes wrap JSON in ```json fences or add
+// Groq (and LLMs in general) sometimes wrap JSON in \`\`\`json fences or add
 // stray text despite instructions. Strip fences first, then fall back to
 // pulling out the first [...] block so a slightly noisy response doesn't
 // turn into a hard failure.
@@ -211,6 +216,7 @@ function safeParseJsonArray(raw) {
   }
   let text = raw.trim().replace(/^```json\s*|^```\s*|```$/gim, '').trim();
 
+  // Tier 1: direct parse
   try {
     const parsed = JSON.parse(text);
     const result = Array.isArray(parsed) ? parsed : [];
@@ -218,21 +224,43 @@ function safeParseJsonArray(raw) {
     return result;
   } catch (directErr) {
     console.warn('[PARSE] Direct JSON.parse failed:', directErr.message, '— attempting regex fallback');
-    const match = text.match(/\[[\s\S]*\]/);
-    if (match) {
-      try {
-        const parsed = JSON.parse(match[0]);
-        const result = Array.isArray(parsed) ? parsed : [];
-        console.log(`[PARSE] Regex fallback JSON.parse succeeded — ${result.length} record(s) extracted`);
-        return result;
-      } catch (fallbackErr) {
-        console.error('[PARSE] Regex fallback JSON.parse also failed:', fallbackErr.message);
-        return [];
-      }
-    }
-    console.error('[PARSE] No [...] block found in model output — returning []');
-    return [];
   }
+
+  // Tier 2: grab the first [...] block
+  const match = text.match(/\[[\s\S]*\]/);
+  if (match) {
+    try {
+      const parsed = JSON.parse(match[0]);
+      const result = Array.isArray(parsed) ? parsed : [];
+      console.log(`[PARSE] Regex fallback JSON.parse succeeded — ${result.length} record(s) extracted`);
+      return result;
+    } catch (fallbackErr) {
+      console.error('[PARSE] Regex fallback JSON.parse also failed:', fallbackErr.message);
+    }
+  }
+
+  // Tier 3: object-level salvage — extracts every valid { ... } even if ] is missing
+  console.warn('[PARSE] No valid [...] block found — attempting object-level salvage');
+  const objects = [];
+  const objectRegex = /\{[^{}]*\}/g;
+  let objMatch;
+  while ((objMatch = objectRegex.exec(text)) !== null) {
+    try {
+      const obj = JSON.parse(objMatch[0]);
+      if (obj && typeof obj === 'object') {
+        objects.push(obj);
+      }
+    } catch (e) {
+      // skip unparseable individual object
+    }
+  }
+  if (objects.length > 0) {
+    console.log(`[PARSE] Object-level salvage succeeded — ${objects.length} object(s) extracted`);
+    return objects;
+  }
+
+  console.error('[PARSE] No salvageable data found in model output — returning []');
+  return [];
 }
 
 // ---------------------------------------------------------------------------
@@ -378,13 +406,13 @@ async function transcribeAudio(buffer, filename) {
 }
 
 async function extractMarks(transcribedText) {
-  console.log('[GROQ][LLAMA] Sending transcribed text to llama-3.1-8b-instant for mark extraction');
+  console.log('[GROQ][LLAMA] Sending transcribed text to llama-3.3-70b-versatile for mark extraction');
   console.log('[GROQ][LLAMA] Input text:', transcribedText);
   const start = Date.now();
   try {
     const completion = await groq.chat.completions.create({
       messages: [{ role: 'user', content: `${AUDIO_PROMPT}\n\nInput: ${transcribedText}` }],
-      model: 'llama-3.1-8b-instant',
+      model: 'llama-3.3-70b-versatile',
       temperature: 0, // deterministic extraction, not creative writing — also fewer retries needed
       max_completion_tokens: 1024,
       top_p: 1,
@@ -404,13 +432,13 @@ async function extractMarks(transcribedText) {
 }
 
 async function extractMarksWithDataset(transcribedText) {
-  console.log('[GROQ][LLAMA] Sending transcribed text to llama-3.1-8b-instant for dataset-aware extraction');
+  console.log('[GROQ][LLAMA] Sending transcribed text to llama-3.3-70b-versatile for dataset-aware extraction');
   console.log('[GROQ][LLAMA] Input text:', transcribedText);
   const start = Date.now();
   try {
     const completion = await groq.chat.completions.create({
-      messages: [{ role: 'user', content: `${DATASET_AUDIO_PROMPT}\n\nInput: ${transcribedText}` }],
-      model: 'llama-3.1-8b-instant',
+      messages: [{ role: 'user', content: `${DATASET_AUDIO_PROMPT}\n${transcribedText}` }],
+      model: 'llama-3.3-70b-versatile',
       temperature: 0,
       max_completion_tokens: 1024,
       top_p: 1,
@@ -569,7 +597,7 @@ app.get('/health', (_req, res) => {
       },
       extraction: {
         provider: 'Groq',
-        model: 'llama-3.1-8b-instant',
+        model: 'llama-3.3-70b-versatile',
         purpose: 'Text → structured JSON (student id + mark)',
       },
     },
