@@ -155,6 +155,52 @@ Output: [{"student id":"300-22-045","mark":6},{"student id":"300-22-047","mark":
 `;
 
 // ---------------------------------------------------------------------------
+// DATASET_AUDIO_PROMPT — used when a student dataset is provided
+// Outputs {"key": "...", "mark": N} instead of {"student id": "...", "mark": N}
+// so the server can fuzzy-match the key against the known student list.
+// ---------------------------------------------------------------------------
+const DATASET_AUDIO_PROMPT = `
+You are a precise data extraction assistant. Your ONLY task is to extract each person's name or ID and their mark from the input text. Return a STRICTLY VALID JSON array.
+
+OUTPUT FORMAT (exact):
+[{"key": "Habibul", "mark": 19}]
+
+RULES:
+- "key" is the name or partial ID as spoken (e.g. "Habibul", "2336", "1707")
+- "mark" is an integer 0-100
+- One object per valid key + mark pair
+- Empty or unparseable input → return exactly: []
+- Output ONLY raw JSON starting with [ and ending with ]. No markdown, no backticks.
+
+EXAMPLES:
+Input: "Habibul got 19, 2336 got 17, 1707 got 20"
+Output: [{"key":"Habibul","mark":19},{"key":"2336","mark":17},{"key":"1707","mark":20}]
+
+Input: "give 19 to Habibul, Tushar scored 20"
+Output: [{"key":"Habibul","mark":19},{"key":"Tushar","mark":20}]
+
+Input: "Zerin 20, Habibul 19"
+Output: [{"key":"Zerin","mark":20},{"key":"Habibul","mark":19}]
+Input: 23215380 গাট 13 820 গাট 15 895 গাট 9
+Output: [{"student id":"232-15-380","mark":13},{"student id":"232-15-820","mark":15},{"student id":"232-15-895","mark":9}]
+
+Input: 105 গাট 70 208 got 92 midterm
+Output: [{"student id":"232-15-105","mark":70},{"student id":"232-15-208","mark":92}]
+
+Input: 2 6 2 1 5 5 5 0 got 14 2 4 1 got 15
+Output: [{"student id":"262-15-550","mark":14},{"student id":"262-15-241","mark":15}]
+
+NEW EXAMPLES (comma separated IDs):
+
+Input: 251, 15012 got 7, 251, 15, 125 got 8, 138 got 10, 146 got 20, 138 got 5
+Output: [{"student id":"251-15-012","mark":7},{"student id":"251-15-125","mark":8},{"student id":"251-15-138","mark":10},{"student id":"251-15-146","mark":20},{"student id":"251-15-138","mark":5}]
+
+Input: 300, 22045 got 6, 47 got 92 , 300, 22,048 got 5,
+Output: [{"student id":"300-22-045","mark":6},{"student id":"300-22-047","mark":92},{"student id":"300-22-048","mark":5}]
+
+`.trim();
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -193,6 +239,85 @@ function safeParseJsonArray(raw) {
     console.error('[PARSE] No [...] block found in model output — returning []');
     return [];
   }
+}
+
+// ---------------------------------------------------------------------------
+// Dataset matching helpers — ported from the Kaggle Flask API
+// Used when a student dataset is provided to fuzzy-match LLM output
+// against known student IDs.
+// ---------------------------------------------------------------------------
+
+function normalize(s) {
+  return String(s).replace(/[-\s]/g, '').toLowerCase();
+}
+
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1]
+        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[m][n];
+}
+
+function similarity(a, b) {
+  const normA = normalize(a);
+  const normB = normalize(b);
+  if (normA === normB) return 1.0;
+  const maxLen = Math.max(normA.length, normB.length);
+  if (maxLen === 0) return 1.0;
+  return 1 - levenshtein(normA, normB) / maxLen;
+}
+
+function matchToDataset(rawKey, dataset, threshold = 0.7) {
+  const rawNorm = normalize(rawKey);
+  let bestMatch = null;
+  let bestScore = 0;
+
+  for (const entry of dataset) {
+    const entryIdNorm = normalize(entry.id);
+    const entryNameNorm = normalize(entry.name);
+
+    // Priority 1: Exact name match
+    if (entryNameNorm === rawNorm) {
+      return { id: entry.id, score: 1.0 };
+    }
+    // Priority 2: Exact full ID match
+    if (entryIdNorm === rawNorm) {
+      return { id: entry.id, score: 1.0 };
+    }
+    // Priority 3: Last 4 digits of ID
+    if (rawNorm.length === 4 && entryIdNorm.endsWith(rawNorm)) {
+      return { id: entry.id, score: 0.98 };
+    }
+    // Priority 4: Last 3 digits of ID
+    if (rawNorm.length === 3 && entryIdNorm.endsWith(rawNorm)) {
+      return { id: entry.id, score: 0.97 };
+    }
+    // Priority 5: Partial ID contains match (>=5 chars)
+    if (rawNorm.length >= 5) {
+      if (entryIdNorm.includes(rawNorm) || rawNorm.includes(entryIdNorm)) {
+        return { id: entry.id, score: 0.95 };
+      }
+    }
+    // Priority 6: Fuzzy name match
+    const nameScore = similarity(rawKey, entry.name);
+    if (nameScore > bestScore) {
+      bestScore = nameScore;
+      bestMatch = entry.id;
+    }
+  }
+
+  if (bestScore >= threshold) {
+    return { id: bestMatch, score: bestScore };
+  }
+  return null;
 }
 
 // In-memory File-like wrapper so groq-sdk can stream a Buffer without ever
@@ -247,6 +372,32 @@ async function extractMarks(transcribedText) {
   }
 }
 
+async function extractMarksWithDataset(transcribedText) {
+  console.log('[GROQ][LLAMA] Sending transcribed text to llama-3.1-8b-instant for dataset-aware extraction');
+  console.log('[GROQ][LLAMA] Input text:', transcribedText);
+  const start = Date.now();
+  try {
+    const completion = await groq.chat.completions.create({
+      messages: [{ role: 'user', content: `${DATASET_AUDIO_PROMPT}\n\nInput: ${transcribedText}` }],
+      model: 'llama-3.1-8b-instant',
+      temperature: 0,
+      max_completion_tokens: 1024,
+      top_p: 1,
+      stream: false,
+    });
+    console.log(`[GROQ][LLAMA] Dataset-aware completion received in ${Date.now() - start}ms`);
+    const content = completion.choices[0]?.message?.content || '[]';
+    console.log('[GROQ][LLAMA] Raw completion content:', content);
+    if (completion.usage) {
+      console.log('[GROQ][LLAMA] Token usage:', completion.usage);
+    }
+    return content;
+  } catch (err) {
+    console.error(`[GROQ][LLAMA] Dataset-aware extraction FAILED after ${Date.now() - start}ms:`, err?.status || '', err?.message || err);
+    throw err;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
@@ -261,17 +412,57 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
 
   console.log(`[REQUEST] File received: name="${req.file.originalname}", mimetype="${req.file.mimetype}", size=${req.file.size} bytes`);
 
+  // Optional student dataset — JSON string in form field "dataset"
+  let dataset = null;
+  if (req.body.dataset) {
+    try {
+      dataset = JSON.parse(req.body.dataset);
+      console.log(`[REQUEST] Dataset provided: ${dataset.length} student(s) in list`);
+    } catch (e) {
+      console.warn('[REQUEST] Invalid JSON in "dataset" field — ignoring', e.message);
+    }
+  }
+
   try {
     console.log('[STEP 1/2] Starting transcription...');
     const transcription = await transcribeAudio(req.file.buffer, req.file.originalname || 'audio.webm');
     const transcribedText = transcription.text || '';
 
     if (!transcribedText.trim()) {
-      console.warn('[STEP 1/2] Transcription returned empty text — skipping extraction, responding with empty data');
+      console.warn('[STEP 1/2] Transcription returned empty text');
+      if (dataset && Array.isArray(dataset) && dataset.length > 0) {
+        return res.json({ result: [], unmatched: [], transcription: '' });
+      }
       return res.json({ success: true, transcription: '', data: [] });
     }
     console.log('[STEP 1/2] Transcription complete.');
 
+    // ── DATASET MODE ──
+    if (dataset && Array.isArray(dataset) && dataset.length > 0) {
+      console.log('[STEP 2/2] Starting dataset-aware extraction...');
+      const rawContent = await extractMarksWithDataset(transcribedText);
+      const parsed = safeParseJsonArray(rawContent);
+      console.log(`[STEP 2/2] LLM extracted ${parsed.length} key(s):`, JSON.stringify(parsed));
+
+      const result = [];
+      const unmatched = [];
+      for (const item of parsed) {
+        const matched = matchToDataset(item.key, dataset);
+        if (matched) {
+          result.push({ id: matched.id, mark: item.mark });
+          console.log(`  ✓ "${item.key}" → ${matched.id} (score: ${matched.score})`);
+        } else {
+          unmatched.push(item.key);
+          console.log(`  ✗ "${item.key}" → no match in dataset`);
+        }
+      }
+
+      console.log(`[STEP 2/2] Dataset matching complete: ${result.length} matched, ${unmatched.length} unmatched`);
+      console.log(`[REQUEST] Total request time: ${Date.now() - reqStart}ms — responding 200 OK\n`);
+      return res.json({ result, unmatched, transcription: transcribedText });
+    }
+
+    // ── ORIGINAL MODE (no dataset) — unchanged behavior ──
     console.log('[STEP 2/2] Starting mark extraction...');
     const rawContent = await extractMarks(transcribedText);
     const parsed = safeParseJsonArray(rawContent);
