@@ -156,6 +156,18 @@ Output: [{"student id":"300-22-045","mark":6},{"student id":"300-22-047","mark":
 Input: ID 24315241, got 13. ID 343, got 19. ID 232-15-281, got 2
 Output: [{"student id":"243-15-241","mark":13},{"student id":"243-15-343","mark":19},{"student id":"232-15-281","mark":2}]
 
+
+PREFIX INHERITANCE (CRITICAL — READ CAREFULLY):
+
+Use the "XXX-XX-" prefix from the last full 8-digit ID seen.
+If no full ID has been seen yet, default prefix is "000-00-".
+
+View this example clearly:
+- When the teacher says "ID 24315241, got 13", that means the student ID is "243-15-241" and the mark is 13.
+- If the teacher then calls only a short ID like "ID 343, got 19", that means you MUST reuse the previous prefix "243-15-" and append the short ID.
+- So "343" becomes "243-15-343". The output must be {"student id":"243-15-343","mark":19}.
+- Think clearly: any short standalone ID always inherits the prefix from the most recent full 8-digit ID.
+
 `;
 
 // ---------------------------------------------------------------------------
@@ -201,6 +213,17 @@ Output: [{"student id":"251-15-012","mark":7},{"student id":"251-15-125","mark":
 
 Input: 300, 22045 got 6, 47 got 92 , 300, 22,048 got 5,
 Output: [{"student id":"300-22-045","mark":6},{"student id":"300-22-047","mark":92},{"student id":"300-22-048","mark":5}]
+
+PREFIX INHERITANCE (CRITICAL — READ CAREFULLY):
+
+Use the "XXX-XX-" prefix from the last full 8-digit ID seen.
+If no full ID has been seen yet, default prefix is "000-00-".
+
+View this example clearly:
+- When the teacher says "ID 24315241, got 13", that means the student ID is "243-15-241" and the mark is 13.
+- If the teacher then calls only a short ID like "ID 343, got 19", that means you MUST reuse the previous prefix "243-15-" and append the short ID.
+- So "343" becomes "243-15-343". The output must be {"student id":"243-15-343","mark":19}.
+- Think clearly: any short standalone ID always inherits the prefix from the most recent full 8-digit ID.
 
 `.trim();
 
