@@ -430,10 +430,7 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
 
     if (!transcribedText.trim()) {
       console.warn('[STEP 1/2] Transcription returned empty text');
-      if (dataset && Array.isArray(dataset) && dataset.length > 0) {
-        return res.json({ result: [], unmatched: [], transcription: '' });
-      }
-      return res.json({ success: true, transcription: '', data: [] });
+      return res.json([]);
     }
     console.log('[STEP 1/2] Transcription complete.');
 
@@ -457,9 +454,10 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
         }
       }
 
+      const formatted = result.map(r => ({ 'student id': r.id, mark: r.mark }));
       console.log(`[STEP 2/2] Dataset matching complete: ${result.length} matched, ${unmatched.length} unmatched`);
       console.log(`[REQUEST] Total request time: ${Date.now() - reqStart}ms — responding 200 OK\n`);
-      return res.json({ result, unmatched, transcription: transcribedText });
+      return res.json(formatted);
     }
 
     // ── ORIGINAL MODE (no dataset) — unchanged behavior ──
