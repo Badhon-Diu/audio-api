@@ -152,6 +152,10 @@ Output: [{"student id":"251-15-012","mark":7},{"student id":"251-15-125","mark":
 
 Input: 300, 22045 got 6, 47 got 92 , 300, 22,048 got 5,
 Output: [{"student id":"300-22-045","mark":6},{"student id":"300-22-047","mark":92},{"student id":"300-22-048","mark":5}]
+
+Input: ID 24315241, got 13. ID 343, got 19. ID 232-15-281, got 2
+Output: [{"student id":"243-15-241","mark":13},{"student id":"243-15-343","mark":19},{"student id":"232-15-281","mark":2}]
+
 `;
 
 // ---------------------------------------------------------------------------
