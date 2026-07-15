@@ -236,6 +236,43 @@ function safeParseJsonArray(raw) {
 }
 
 // ---------------------------------------------------------------------------
+// FIX: extractKeyAndMark
+//
+// WHY THIS EXISTS (read this before touching it):
+// DATASET_AUDIO_PROMPT asks the model to return {"key": ..., "mark": ...},
+// but llama-3.1-8b-instant sometimes ignores that and returns the OTHER
+// schema instead: {"student id": ..., "mark": ...} (the one used by
+// AUDIO_PROMPT / non-dataset mode). When that happened, the old code did
+// `item.key` directly, got `undefined`, and matchToDataset(undefined, ...)
+// silently failed for every single record — even though the model had
+// extracted everything correctly. This function normalizes BOTH possible
+// shapes into one consistent { key, mark } pair so downstream matching
+// always has something to work with, regardless of which schema the model
+// decided to use on a given call.
+// ---------------------------------------------------------------------------
+function extractKeyAndMark(item) {
+  if (!item || typeof item !== 'object') {
+    return { key: null, mark: null };
+  }
+
+  const key =
+    item.key ??
+    item['student id'] ??
+    item['student_id'] ??
+    item.id ??
+    item.name ??
+    null;
+
+  const markRaw = item.mark ?? item.marks ?? null;
+  const mark = markRaw === null || markRaw === undefined ? null : Number(markRaw);
+
+  return {
+    key: key === null || key === undefined ? null : String(key),
+    mark: Number.isNaN(mark) ? null : mark,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Dataset matching helpers — ported from the Kaggle Flask API
 // Used when a student dataset is provided to fuzzy-match LLM output
 // against known student IDs.
@@ -437,14 +474,25 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
 
       const result = [];
       const unmatched = [];
+
       for (const item of parsed) {
-        const matched = matchToDataset(item.key, dataset);
+        // FIX: normalize whichever schema the model actually returned
+        // ("key" or "student id") instead of assuming item.key exists.
+        const { key, mark } = extractKeyAndMark(item);
+
+        if (key === null || mark === null) {
+          console.warn('  ✗ Skipping malformed item from model:', JSON.stringify(item));
+          unmatched.push(key ?? '(missing key)');
+          continue;
+        }
+
+        const matched = matchToDataset(key, dataset);
         if (matched) {
-          result.push({ id: matched.id, mark: item.mark });
-          console.log(`  ✓ "${item.key}" → ${matched.id} (score: ${matched.score})`);
+          result.push({ id: matched.id, mark });
+          console.log(`  ✓ "${key}" → ${matched.id} (score: ${matched.score})`);
         } else {
-          unmatched.push(item.key);
-          console.log(`  ✗ "${item.key}" → no match in dataset`);
+          unmatched.push(key);
+          console.log(`  ✗ "${key}" → no match in dataset`);
         }
       }
 
