@@ -176,55 +176,22 @@ View this example clearly:
 // so the server can fuzzy-match the key against the known student list.
 // ---------------------------------------------------------------------------
 const DATASET_AUDIO_PROMPT = `
-You are a precise data extraction assistant. Your ONLY task is to extract each person's name or ID and their mark from the input text. Return a STRICTLY VALID JSON array.
+Extract student names or IDs and their marks from the text.
+Return ONLY a valid JSON array. No markdown, no backticks, no code.
 
-OUTPUT FORMAT (exact):
-[{"key": "Habibul", "mark": 19}]
+FORMAT: [{"key": "name_or_id", "mark": number}]
 
 RULES:
-- "key" is the name or partial ID as spoken (e.g. "Habibul", "2336", "1707")
-- "mark" is an integer 0-100
-- One object per valid key + mark pair
-- Empty or unparseable input → return exactly: []
-- Output ONLY raw JSON starting with [ and ending with ]. No markdown, no backticks.
+- "key" = student name or partial ID as spoken
+- "mark" = integer 0-100
+- If nothing found, return []
 
 EXAMPLES:
 Input: "Habibul got 19, 2336 got 17, 1707 got 20"
 Output: [{"key":"Habibul","mark":19},{"key":"2336","mark":17},{"key":"1707","mark":20}]
 
-Input: "give 19 to Habibul, Tushar scored 20"
-Output: [{"key":"Habibul","mark":19},{"key":"Tushar","mark":20}]
-
 Input: "Zerin 20, Habibul 19"
 Output: [{"key":"Zerin","mark":20},{"key":"Habibul","mark":19}]
-Input: 23215380 গাট 13 820 গাট 15 895 গাট 9
-Output: [{"student id":"232-15-380","mark":13},{"student id":"232-15-820","mark":15},{"student id":"232-15-895","mark":9}]
-
-Input: 105 গাট 70 208 got 92 midterm
-Output: [{"student id":"232-15-105","mark":70},{"student id":"232-15-208","mark":92}]
-
-Input: 2 6 2 1 5 5 5 0 got 14 2 4 1 got 15
-Output: [{"student id":"262-15-550","mark":14},{"student id":"262-15-241","mark":15}]
-
-NEW EXAMPLES (comma separated IDs):
-
-Input: 251, 15012 got 7, 251, 15, 125 got 8, 138 got 10, 146 got 20, 138 got 5
-Output: [{"student id":"251-15-012","mark":7},{"student id":"251-15-125","mark":8},{"student id":"251-15-138","mark":10},{"student id":"251-15-146","mark":20},{"student id":"251-15-138","mark":5}]
-
-Input: 300, 22045 got 6, 47 got 92 , 300, 22,048 got 5,
-Output: [{"student id":"300-22-045","mark":6},{"student id":"300-22-047","mark":92},{"student id":"300-22-048","mark":5}]
-
-PREFIX INHERITANCE (CRITICAL — READ CAREFULLY):
-
-Use the "XXX-XX-" prefix from the last full 8-digit ID seen.
-If no full ID has been seen yet, default prefix is "000-00-".
-
-View this example clearly:
-- When the teacher says "ID 24315241, got 13", that means the student ID is "243-15-241" and the mark is 13.
-- If the teacher then calls only a short ID like "ID 343, got 19", that means you MUST reuse the previous prefix "243-15-" and append the short ID.
-- So "343" becomes "243-15-343". The output must be {"student id":"243-15-343","mark":19}.
-- Think clearly: any short standalone ID always inherits the prefix from the most recent full 8-digit ID.
-
 `.trim();
 
 // ---------------------------------------------------------------------------
